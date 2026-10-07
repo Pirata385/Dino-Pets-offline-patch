@@ -28,8 +28,6 @@ import java.lang.reflect.Method;
 public final class Offline {
     public static final String TAG = "DinoPetsOffline";
 
-    public static final String MSG_PURCHASES =
-            "Purchases are not available in the offline edition.";
     public static final String MSG_FACEBOOK =
             "Facebook features are not available in the offline edition.";
     public static final String MSG_LINK =
@@ -86,25 +84,40 @@ public final class Offline {
     }
 
     /**
-     * Google Play / GetJar purchases cannot complete without their servers.
-     * Report a failed transaction straight away so the game never waits.
+     * Coin and gem packs (Google Play and GetJar) are granted locally: report a
+     * successful purchase through the game's own callback, as the original
+     * billing code did.  The game then adds the pack itself (same amounts and
+     * level multiplier, "Purchase complete" pop-up, saved with the shelter).
      */
-    public static void purchaseUnavailable() {
-        toast(MSG_PURCHASES);
+    public static void purchaseSucceeded() {
+        final int callback = cocojava.mInAppCallback;
+        final int self = cocojava.mInAppSelf;
+        final String sku = cocojava.mProductId != null ? cocojava.mProductId : "";
+        Log.i(TAG, "offline purchase granted: " + sku);
         queueOnGL(new Runnable() {
             public void run() {
-                cocojava.mInAppResponce = -1;
-                CocoJNI.MsetInAppResponce(-1, cocojava.mInAppCallback, cocojava.mInAppSelf,
-                        cocojava.mProductId, "", "");
+                cocojava.mInAppResponce = 1;
+                CocoJNI.MsetInAppResponce(1, callback, self, sku, receiptFor(sku), "offline");
             }
         });
     }
 
-    /** Receipt validation used services.miniclippt.com; answer "failed". */
-    public static void receiptValidationUnavailable(final int self, final int callback) {
+    /** Stand-in for the Google Play purchase JSON (native code copies it into 1 KB buffers). */
+    static String receiptFor(String sku) {
+        long now = System.currentTimeMillis();
+        String json = "{\"orderId\":\"offline." + now + "\",\"packageName\":\"com.miniclip.dinopets\","
+                + "\"productId\":\"" + sku + "\",\"purchaseTime\":" + now + ",\"purchaseState\":0}";
+        return json.length() > 900 ? json.substring(0, 900) : json;
+    }
+
+    /**
+     * Receipt validation used services.miniclippt.com; answer "valid" (0) at
+     * once, exactly like the original ReceiptValidator.bypassValidation switch.
+     */
+    public static void receiptValidated(final int self, final int callback) {
         queueOnGL(new Runnable() {
             public void run() {
-                ReceiptValidator.MvalidateResponse(self, -1, "offline", callback);
+                ReceiptValidator.MvalidateResponse(self, 0, "", callback);
             }
         });
     }

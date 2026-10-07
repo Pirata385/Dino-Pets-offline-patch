@@ -92,6 +92,276 @@ NSLOG_SINK_PTR = 0x9E74E8            # sNSLogCString function pointer (R_ARM_REL
 ANDROID_LOG_PRINT_PLT = 0x2906B0
 CODE_CAVE = 0x5A4010                 # -[GameLayer loadingStepSetupID]: dead code (no selector refs)
 
+# Facebook-exclusive dinosaur.  The "Login to Facebook" quest (q_fbLogin) rewarded
+# 'other: d_Dimorphodon': -[GameLayer questRewardPopUpCallback:] un-hid that dino's
+# shop entry and added its id to mUnlockedObjects, which is saved as key "1004" and
+# re-applied by -[GameLayer unlockObjects:] on every load.  The offline edition does
+# the same, without Facebook, once the tutorial is over.
+FBDINO_CAVE = 0x5A4100               # rest of the dead -[GameLayer loadingStepSetupID]
+FBDINO_CAVE_END = 0x5A47E8           # next method: -[GameLayer configSetupSuccessfulWithData:]
+GL_onTutorialFinished_epilogue = 0x58F17C  # 'sub sp, fp, #28' before 'pop {r4-r9, sl, fp, pc}'
+GL_showMainView = 0x5B8734           # 'push {r4-r9, sl, fp, lr}'; UI thread, each time the main map is entered
+OBJC_GET_CLASS = 0x2920BC
+OBJC_MSG_LOOKUP = 0x2951AC
+# selector references (struct objc_selector) from GameLayer.mm's own selector table
+FBDINO_SELREFS = {
+    "SEL_getState": 0xB329F8,
+    "SEL_containsObject": 0xB32D90,
+    "SEL_getStructureConfigFromId": 0xB32B50,
+    "SEL_setHidden": 0xB32D18,
+    "SEL_addObject": 0xB32C80,
+    "SEL_forceSave": 0xB30878,
+    "SEL_stringWithUTF8String": 0xB319B8,
+    "SEL_alloc": 0xB32850,
+    "SEL_init": 0xB30268,
+    "SEL_autorelease": 0xB30AE0,
+    "SEL_sharedLocalizationUtils": 0xB30EF8,
+    "SEL_getText": 0xB30EE0,
+    "SEL_setTitle": 0xB32720,
+    "SEL_addTextElement": 0xB30DB0,
+    "SEL_addButton": 0xB31078,
+    "SEL_showMessagePopUp": 0xB311B0,
+    "SEL_performSelectorOnMainThread": 0xB308B0,  # ...:withObject:waitUntilDone:
+}
+
+FBDINO_SRC = r"""
+    .equ OFF_TUTORIAL,    0x314     @ GameLayer.mTutorial, nil once the tutorial is finished
+    .equ OFF_POPUPMGR,    0xc8c     @ GameLayer message pop-up manager (-showMessagePopUp:)
+    .equ OFF_UNLOCKED_HI, 0x1000    @ GameLayer.mUnlockedObjects at +0x1138:
+    .equ OFF_UNLOCKED_LO, 0x138     @   NSMutableSet, saved as key "1004"
+    .equ CFG_ID,          0x8       @ BaseConfig: structure id (NSString)
+    .equ CFG_SHOPENTRY,   0x1c      @ BaseConfig: shop entry object (-setHidden:)
+    .equ ST_VISITING,     4         @ -[GameLayer getState] values
+    .equ ST_FEEDMG,       0x28
+    .equ ST_LOADVISIT,    0x2c
+
+    @ ptab offsets (PC-relative pointers, see the table at the end)
+    .equ T_getState, 0
+    .equ T_containsObject, 4
+    .equ T_getStructureConfigFromId, 8
+    .equ T_setHidden, 12
+    .equ T_addObject, 16
+    .equ T_forceSave, 20
+    .equ T_stringWithUTF8String, 24
+    .equ T_alloc, 28
+    .equ T_init, 32
+    .equ T_autorelease, 36
+    .equ T_sharedLocalizationUtils, 40
+    .equ T_getText, 44
+    .equ T_setTitle, 48
+    .equ T_addTextElement, 52
+    .equ T_addButton, 56
+    .equ T_showMessagePopUp, 60
+    .equ T_performOnMain, 64
+    .equ P_NSString, 68
+    .equ P_dino, 72
+    .equ P_MessagePopUpParams, 76
+    .equ P_LocalizationUtils, 80
+    .equ P_CNGTL, 84
+    .equ P_OK, 88
+    .equ P_text, 92
+
+hook_tutorial_finished:                 @ +0: replaces the epilogue's 'sub sp, fp, #28'
+    mov     r0, r8                      @ r8 = self throughout -[GameLayer onTutorialFinished]
+    bl      fbdino_grant
+    sub     sp, fp, #28
+    pop     {r4, r5, r6, r7, r8, r9, sl, fp, pc}
+
+hook_show_main_view:                    @ +16: replaces the prologue's 'push {r4-r9, sl, fp, lr}'
+    push    {r0, r1, r2, r3, ip, lr}
+    bl      fbdino_grant
+    pop     {r0, r1, r2, r3, ip, lr}
+    push    {r4, r5, r6, r7, r8, r9, sl, fp, lr}
+    b       SHOW_MAIN_VIEW_BODY
+
+@ void fbdino_grant(GameLayer *self)
+@   once the tutorial is finished and d_Dimorphodon is not unlocked yet:
+@   [[self getStructureConfigFromId:@"d_Dimorphodon"]->shopEntry setHidden:NO];
+@   [self->mUnlockedObjects addObject:cfg->id]; [self forceSave];
+@   then a "Congratulations!" pop-up, queued with performSelectorOnMainThread so it
+@   opens after the current state change has finished.
+fbdino_grant:
+    push    {r4, r5, r6, r7, r8, lr}
+    ldr     r7, 8f
+7:  add     r7, pc, r7                  @ r7 = ptab
+    movs    r4, r0
+    beq     9f
+    ldr     r0, [r4, #OFF_TUTORIAL]
+    cmp     r0, #0
+    bne     9f                          @ tutorial still running
+    add     r0, r4, #OFF_UNLOCKED_HI
+    ldr     r5, [r0, #OFF_UNLOCKED_LO]
+    cmp     r5, #0
+    beq     9f
+    mov     r0, r4
+    mov     r1, #T_getState
+    bl      send
+    cmp     r0, #ST_VISITING
+    cmpne   r0, #ST_LOADVISIT
+    beq     9f                          @ never while visiting another shelter
+    mov     r8, r0
+    ldr     r0, [r7, #P_dino]
+    add     r0, r0, r7
+    bl      nsstring
+    movs    r6, r0
+    beq     9f
+    mov     r0, r5
+    mov     r1, #T_containsObject
+    mov     r2, r6
+    bl      send
+    tst     r0, #0xff
+    bne     9f                          @ already unlocked: no second grant
+    mov     r0, r4
+    mov     r1, #T_getStructureConfigFromId
+    mov     r2, r6
+    bl      send
+    movs    r6, r0                      @ r6 = BaseConfig *
+    beq     9f
+    ldr     r0, [r6, #CFG_SHOPENTRY]
+    mov     r1, #T_setHidden
+    mov     r2, #0
+    bl      send
+    mov     r0, r5
+    mov     r1, #T_addObject
+    ldr     r2, [r6, #CFG_ID]
+    bl      send
+    mov     r0, r4
+    mov     r1, #T_forceSave
+    bl      send
+    cmp     r8, #ST_FEEDMG
+    beq     9f                          @ no pop-ups during the feeding mini-game
+    ldr     r0, [r7, #P_MessagePopUpParams]
+    add     r0, r0, r7
+    bl      OBJC_GET_CLASS
+    mov     r1, #T_alloc
+    bl      send
+    mov     r1, #T_init
+    bl      send
+    mov     r1, #T_autorelease
+    bl      send
+    movs    r6, r0                      @ r6 = MessagePopUpParams
+    beq     9f
+    ldr     r0, [r7, #P_LocalizationUtils]
+    add     r0, r0, r7
+    bl      OBJC_GET_CLASS
+    mov     r1, #T_sharedLocalizationUtils
+    bl      send
+    mov     r5, r0                      @ r5 = [LocalizationUtils sharedLocalizationUtils]
+    ldr     r0, [r7, #P_CNGTL]
+    add     r0, r0, r7
+    bl      nsstring
+    mov     r2, r0
+    mov     r0, r5
+    mov     r1, #T_getText
+    bl      send                        @ "Congratulations!"
+    mov     r2, r0
+    mov     r0, r6
+    mov     r1, #T_setTitle
+    bl      send
+    ldr     r0, [r7, #P_text]
+    add     r0, r0, r7
+    bl      nsstring
+    mov     r2, r0
+    mov     r0, r6
+    mov     r1, #T_addTextElement
+    bl      send
+    ldr     r0, [r7, #P_OK]
+    add     r0, r0, r7
+    bl      nsstring
+    mov     r2, r0
+    mov     r0, r5
+    mov     r1, #T_getText
+    bl      send                        @ "OK"
+    mov     r2, r0
+    mov     r0, r6
+    mov     r1, #T_addButton
+    bl      send
+    ldr     r5, [r4, #OFF_POPUPMGR]
+    cmp     r5, #0
+    beq     9f
+    ldr     r8, [r7, #T_performOnMain]
+    add     r8, r8, r7
+    mov     r0, r5
+    mov     r1, r8
+    bl      OBJC_MSG_LOOKUP
+    mov     ip, r0
+    ldr     r2, [r7, #T_showMessagePopUp]
+    add     r2, r2, r7                  @ performSelectorOnMainThread:@selector(showMessagePopUp:)
+    mov     r3, r6                      @   withObject:params
+    sub     sp, sp, #8
+    mov     r0, #0
+    str     r0, [sp]                    @   waitUntilDone:NO
+    mov     r0, r5
+    mov     r1, r8
+    blx     ip
+    add     sp, sp, #8
+9:  pop     {r4, r5, r6, r7, r8, pc}
+8:  .word   ptab - (7b + 8)
+
+send:                                   @ r0 = receiver, r1 = ptab offset of a SEL, r2 = argument
+    push    {r4, r5, r6, lr}
+    mov     r4, r0
+    ldr     r5, [r7, r1]
+    add     r5, r5, r7
+    mov     r6, r2
+    mov     r1, r5
+    bl      OBJC_MSG_LOOKUP             @ nil receivers get the runtime's nil method
+    mov     r3, r0
+    mov     r0, r4
+    mov     r1, r5
+    mov     r2, r6
+    blx     r3
+    pop     {r4, r5, r6, pc}
+
+nsstring:                               @ r0 = C string -> [NSString stringWithUTF8String:]
+    push    {r4, lr}
+    mov     r4, r0
+    ldr     r0, [r7, #P_NSString]
+    add     r0, r0, r7
+    bl      OBJC_GET_CLASS
+    mov     r1, #T_stringWithUTF8String
+    mov     r2, r4
+    bl      send
+    pop     {r4, pc}
+
+    .align 2
+ptab:
+    .word   SEL_getState - ptab
+    .word   SEL_containsObject - ptab
+    .word   SEL_getStructureConfigFromId - ptab
+    .word   SEL_setHidden - ptab
+    .word   SEL_addObject - ptab
+    .word   SEL_forceSave - ptab
+    .word   SEL_stringWithUTF8String - ptab
+    .word   SEL_alloc - ptab
+    .word   SEL_init - ptab
+    .word   SEL_autorelease - ptab
+    .word   SEL_sharedLocalizationUtils - ptab
+    .word   SEL_getText - ptab
+    .word   SEL_setTitle - ptab
+    .word   SEL_addTextElement - ptab
+    .word   SEL_addButton - ptab
+    .word   SEL_showMessagePopUp - ptab
+    .word   SEL_performSelectorOnMainThread - ptab
+    .word   s_NSString - ptab
+    .word   s_dino - ptab
+    .word   s_MessagePopUpParams - ptab
+    .word   s_LocalizationUtils - ptab
+    .word   s_CNGTL - ptab
+    .word   s_OK - ptab
+    .word   s_text - ptab
+s_NSString:           .asciz "NSString"
+s_dino:               .asciz "d_Dimorphodon"
+s_MessagePopUpParams: .asciz "MessagePopUpParams"
+s_LocalizationUtils:  .asciz "LocalizationUtils"
+s_CNGTL:              .asciz "CNGTL"
+s_OK:                 .asciz "OK"
+s_text:               .asciz "You unlocked the exclusive Facebook dino!\nDimorphodon is now free in the Dinos shop."
+    .align 2
+"""
+FBDINO_HOOK_TUTORIAL = FBDINO_CAVE + 0
+FBDINO_HOOK_MAINVIEW = FBDINO_CAVE + 16
+
 
 def patches(debug_nslog):
     p = []
@@ -157,6 +427,21 @@ def patches(debug_nslog):
     p.append(("SocialUtils checkNotifications -> skip server poll",
               SocialUtils_checkNotifications_req, words(0x0A00003C),
               words(b(SocialUtils_checkNotifications_req, SocialUtils_checkNotifications_skip))))
+
+    # 11. Facebook-exclusive dinosaur: unlock d_Dimorphodon (the q_fbLogin quest's
+    #     reward) once the tutorial is finished - right when it finishes, and when
+    #     the main map opens for saves that finished it before this patch.
+    #     mUnlockedObjects is a set, so it is granted at most once per save.
+    defs = dict(FBDINO_SELREFS, OBJC_GET_CLASS=OBJC_GET_CLASS, OBJC_MSG_LOOKUP=OBJC_MSG_LOOKUP,
+                SHOW_MAIN_VIEW_BODY=GL_showMainView + 4)
+    cave = asm(FBDINO_CAVE, FBDINO_SRC, defs)
+    assert FBDINO_CAVE + len(cave) <= FBDINO_CAVE_END, "FB dino code does not fit"
+    p.append(("FB dino: unlock code in dead loadingStepSetupID (%d bytes)" % len(cave),
+              FBDINO_CAVE, None, cave))
+    p.append(("onTutorialFinished -> unlock FB dino", GL_onTutorialFinished_epilogue,
+              words(0xE24BD01C), words(b(GL_onTutorialFinished_epilogue, FBDINO_HOOK_TUTORIAL))))
+    p.append(("showMainView -> unlock FB dino (saves that finished the tutorial earlier)",
+              GL_showMainView, words(0xE92D4FF0), words(b(GL_showMainView, FBDINO_HOOK_MAINVIEW))))
 
     if debug_nslog:
         tag_fmt = b"DinoNSLog\0%.*s\0"

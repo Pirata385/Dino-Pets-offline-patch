@@ -73,8 +73,8 @@ a network wait.
 | `com.miniclip.Ping.PingHandler` | TCP connect to port 53 / ICMP | answers immediately "unreachable" (same code as the original timeout path) |
 | `cocojava.isOnline()` | `ConnectivityManager` | always `false` |
 | `com.miniclip.newsfeed.*` | `services.miniclippt.com/newsfeed/newsfeed.php` | disabled (`mUSE_NEWSFEED = false`, `update`/`checkServer`/remote images stubbed); the News button is greyed out |
-| `InAppActivity` (Google Play billing), `GetJar` | Play Store billing service, GetJar SDK | no billing service binding; purchase requests are answered with "failed" immediately and a toast explains why; price localisation returns the config prices |
-| `utils.ReceiptValidator` | `services.miniclippt.com/receiptValidation/index.php` | answers "failed" immediately |
+| `InAppActivity` (Google Play billing), `GetJar` | Play Store billing service, GetJar SDK | no billing service binding; coin and gem packs are granted locally as successful purchases (§8); price localisation returns the config prices |
+| `utils.ReceiptValidator` | `services.miniclippt.com/receiptValidation/index.php` | answers "valid" immediately, like the original `bypassValidation` switch (§8) |
 | Facebook SDK (`cocojava.faceBook_*`) | `graph.facebook.com`, `m.facebook.com` | disabled; login/share/invite/like show a toast |
 | `cocojava.openURL` | browser / Play Store | toast instead of an intent to a dead page |
 | GCM (`GCMIntentService`, `mUSE_C2DM`) | Google push | disabled, components removed from the manifest |
@@ -119,6 +119,9 @@ Each patch checks the original bytes first; the script refuses any other build.
 | N8 | `0x60FA74` | `-[GameLayer updateMessagingRegistry]` | `bx lr` |
 | N9 | `0x64DE78` | `-[MCCPS forceUpdateOnAllProperties]` | `bx lr` |
 | N10 | `0x4B6B8C` | `-[SocialUtils checkNotifications]` | `beq` → `b 0x4B6C84` (keep the 5 s timer, skip the request) |
+| N11 | `0x5A4100` | rest of the dead `-[GameLayer loadingStepSetupID]` | 840 bytes of new code: `fbdino_grant` (Facebook dino unlock, §8) and two hook trampolines |
+| N12 | `0x58F17C` | epilogue of `-[GameLayer onTutorialFinished]` | `sub sp,fp,#28` → `b` trampoline that calls `fbdino_grant(self)` and then returns as before |
+| N13 | `0x5B8734` | prologue of `-[GameLayer showMainView]` | `push {r4-r9,sl,fp,lr}` → `b` trampoline that calls `fbdino_grant(self)`, re-executes the push and continues the method |
 | — | `.dynamic` | `DT_NEEDED` | absolute build-machine paths (`/PortsTools/android/…/libc.so`) → plain sonames; required for targetSdk ≥ 23 |
 
 Debug builds (`DEBUG=1 ./build.sh`) additionally route the compiled-out
@@ -131,8 +134,8 @@ Small smali edits redirect the methods listed in §3.2 to
 `com.miniclip.offline.Offline`, a helper class compiled from Java
 (`patches/java/src`).  It delivers the "offline" answers on the GL thread
 exactly as the original asynchronous code would have (NTP, ping, purchase and
-receipt-validation callbacks), shows short toasts for user-initiated online
-features, and rebuilds the local reminder notification with
+receipt-validation callbacks), shows short toasts for the online features that
+cannot work offline, and rebuilds the local reminder notification with
 `Notification.Builder`.  The original `BootReceiver` used
 `Notification.setLatestEventInfo()`, which no longer exists on Android 6.0+.
 
@@ -166,8 +169,9 @@ no active network (`dumpsys connectivity`: "Active default network: none").
 * Persistence: force-stop and relaunch restore the exact state; the decrypted
   `save.plist` matches the HUD.  Timers finish while the app is closed.
 * Upgrade from an earlier build of the offline edition keeps the save.
-* Store: Google Play and GetJar purchases end immediately with "Transaction
-  Cancelled" plus a toast; the game carries on.
+* Store: Google Play and GetJar coin and gem packs complete at once with the
+  game's "Purchase complete" pop-up; the amounts are added and saved (§8).
+* Facebook-exclusive dino: unlocked when the tutorial finishes, once (§8).
 * Social: Profile, Friends, Messages ("No pending messages!"), Community list,
   visiting Kirini's level-20 shelter, rating it and adding her as a friend all
   work.  Adding an unknown Dino ID ends at once with "The entered Dino ID does
@@ -181,3 +185,84 @@ no active network (`dumpsys connectivity`: "Active default network: none").
   endpoint (`dinopets_social.php`: Dino ID registration, add-by-Dino-ID, message
   fetch when the Social screen opens).  Each attempt failed within about a
   second and the game showed its normal error handling.
+
+## 8. Local replacements for purchases and the Facebook reward
+
+These two features replace online rewards with local equivalents.  Both reuse
+the game's own code paths, so amounts, pop-ups, sounds and save keys are the
+original ones.
+
+### Coin and gem packs
+
+The original flow (native `-[GameLayer performTransaction:forState:]`):
+
+1. The shop calls Java `cocojava.callInAppPurchase(sku, inAppResponse, self)`
+   (Google Play tab) or `GetJar.inAppPurchase(...)` (GetJar tab).
+2. The store reports back through JNI `CocoJNI.MsetInAppResponce(1, callback,
+   self, sku, signedData, signature)`.  The native `inAppResponse()` callback
+   calls `-[GameLayer transactionComplete:receipt:]` →
+   `-[GameLayer finishPurchase:]`, which adds the pack amount (times the
+   level multiplier from `premiumCurrencyShopLevelMultiplierMap`), shows the
+   "Purchase complete" pop-up, plays the purchase sound and requests a save.
+3. `inAppResponse()` then starts receipt validation
+   (`ReceiptValidator_validate` → `services.miniclippt.com`).  Its result goes
+   to `-[GameLayer handleSuccessWithReceipt:]` (logs the purchase) or
+   `handleError:withReceipt:`.
+
+Offline edition:
+
+* `InAppActivity.requestPurchaseAct/requestPurchaseActManaged`,
+  `GetJar.inAppPurchase` and `DinoPetsActivity.onGetJarInAppPurchase` call
+  `Offline.purchaseSucceeded()`.  It sends `MsetInAppResponce(1, …)` on the
+  GL thread with the SKU, a short local purchase record and the signature
+  `"offline"`, exactly as the Play Store success callback did.  No Play Store
+  dialog appears and nothing is charged.
+* `ReceiptValidator_validate` calls `Offline.receiptValidated()`, which
+  answers result code 0 ("valid"), the same answer the original
+  `ReceiptValidator.bypassValidation` switch gave.  The game logs the purchase
+  and does not try to validate it again.
+* The currency is added by the game's own `finishPurchase:` and saved in
+  `save.plist` (keys `013` coins, `014` gems).  Example from the tests:
+  "Bunch of Coins" gave 3800 coins, "Bunch of Gems" 20 gems, and the GetJar
+  "Pouch of Gems" 55 gems.  The amounts are those shown in the shop.
+
+### Facebook-exclusive dinosaur
+
+The reward for logging in to Facebook was the quest `q_fbLogin` ("Login to
+Facebook", shown by the tutorial's last pop-up: "Login on Facebook to win 10
+gems and an exclusive dino!").  Its `other` field is `d_Dimorphodon`, a dino
+that is `hidden` in the shop config.  When a quest with a structure reward
+completes, `-[GameLayer questRewardPopUpCallback:]` calls
+`[[cfg shopEntry] setHidden:NO]` and adds the id to `mUnlockedObjects`
+(`NSMutableSet`, `GameLayer+0x1138`).  That set is saved as key `1004` and
+re-applied by `-[GameLayer unlockObjects:]` on every load.  The dino itself
+(`cost` 0, 1 keeper, insectivore) then behaves like any other dino.
+
+The offline edition does the same thing without Facebook.  `fbdino_grant(self)`
+is ARM code in the dead `loadingStepSetupID` method (N11).  It runs:
+
+* at the end of `-[GameLayer onTutorialFinished]` (N12), i.e. right after the
+  first tutorial is completed;
+* at the start of `-[GameLayer showMainView]` (N13), so that saves which had
+  finished the tutorial before this feature existed get the dino too.
+
+It only acts when the tutorial is finished (`mTutorial == nil`), the player is
+not visiting another shelter, and `mUnlockedObjects` does not already contain
+`d_Dimorphodon`.  It un-hides the shop entry, adds the id to `mUnlockedObjects`,
+calls `-[GameLayer forceSave]`, and queues a "Congratulations!" pop-up with the
+game's `MessagePopUpParams` / `-showMessagePopUp:` on the main thread.  Because
+the unlock is stored in the save's own `1004` set, it is granted once per save.
+Restarting the game or replaying does not grant it again, and starting a new
+game grants it again only after that game's tutorial is completed.
+
+The quest's 10 gems are not added: this feature restores only the exclusive
+dino.  The Facebook login button and quest stay as
+they were (logging in still shows the offline notice).
+
+Verified offline on the emulator: clean install → tutorial → pop-up →
+Dimorphodon free in the Dinos shop → placed, built and inaugurated
+([screenshot](screenshots/11-dimorphodon-in-shelter.jpg)) →
+force-stop and relaunch keep `1004 = [d_Dimorphodon]` with no second pop-up.
+A save with `053` (tutorial finished) = true and an empty `1004` got the
+unlock once when the map opened.
+

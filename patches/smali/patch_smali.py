@@ -74,7 +74,8 @@ replace_method("com.miniclip.newsfeed.NewsfeedDialog$URLImageView",
                ".method public loadFromURL(Ljava/lang/String;)Z", FALSE, "no remote images")
 
 # ---------------------------------------------------------------------------
-# Purchases (Google Play billing, GetJar) and receipt validation
+# Purchases (Google Play billing, GetJar) and receipt validation: coin and gem
+# packs are granted locally through the game's own success callback
 # ---------------------------------------------------------------------------
 replace_method("com.miniclip.nativeJNI.InAppActivity",
                ".method public onCreate(Landroid/os/Bundle;)V",
@@ -95,15 +96,15 @@ for m in ("requestPurchaseAct", "requestPurchaseActManaged"):
     replace_method("com.miniclip.nativeJNI.InAppActivity",
                    ".method public %s(Ljava/lang/String;)V" % m,
                    "    .locals 0\n"
-                   "    invoke-static {}, Lcom/miniclip/offline/Offline;->purchaseUnavailable()V\n"
+                   "    invoke-static {}, Lcom/miniclip/offline/Offline;->purchaseSucceeded()V\n"
                    "    return-void\n",
-                   "answer purchases with 'failed' immediately (no store)")
+                   "grant the pack locally (successful purchase, no store)")
 replace_method("com.miniclip.utils.ReceiptValidator",
                ".method public static ReceiptValidator_validate(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V",
                "    .locals 0\n"
-               "    invoke-static {p3, p4}, Lcom/miniclip/offline/Offline;->receiptValidationUnavailable(II)V\n"
+               "    invoke-static {p3, p4}, Lcom/miniclip/offline/Offline;->receiptValidated(II)V\n"
                "    return-void\n",
-               "no receipt validation server")
+               "receipt answered 'valid' locally (original bypassValidation path)")
 stub_void("com.miniclip.utils.ReceiptValidator",
           ".method public validate(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/miniclip/utils/ReceiptValidator$ReceiptValidatorResponseCallback;)V",
           "no HTTP POST")
@@ -116,9 +117,9 @@ replace_method("com.miniclip.GetJar.GetJar",
                "    sput p3, Lcom/miniclip/nativeJNI/cocojava;->mInAppCallback:I\n"
                "    sput p4, Lcom/miniclip/nativeJNI/cocojava;->mInAppSelf:I\n"
                "    sput-object p0, Lcom/miniclip/nativeJNI/cocojava;->mProductId:Ljava/lang/String;\n"
-               "    invoke-static {}, Lcom/miniclip/offline/Offline;->purchaseUnavailable()V\n"
+               "    invoke-static {}, Lcom/miniclip/offline/Offline;->purchaseSucceeded()V\n"
                "    return-void\n",
-               "GetJar purchases -> failed immediately")
+               "GetJar purchases -> granted locally")
 replace_method("com.miniclip.GetJar.GetJar", ".method public static recommendedPrice([II)[I",
                "    .locals 0\n    return-object p0\n", "no GetJar price localisation")
 replace_method("com.miniclip.GetJar.GetJar", ".method public static recommendedPrice(I)I",
@@ -129,9 +130,9 @@ replace_method("com.miniclip.dinopets.DinoPetsActivity",
                "    sput p4, Lcom/miniclip/nativeJNI/cocojava;->mInAppCallback:I\n"
                "    sput p5, Lcom/miniclip/nativeJNI/cocojava;->mInAppSelf:I\n"
                "    sput-object p1, Lcom/miniclip/nativeJNI/cocojava;->mProductId:Ljava/lang/String;\n"
-               "    invoke-static {}, Lcom/miniclip/offline/Offline;->purchaseUnavailable()V\n"
+               "    invoke-static {}, Lcom/miniclip/offline/Offline;->purchaseSucceeded()V\n"
                "    return-void\n",
-               "GetJar page -> failed immediately")
+               "GetJar page -> granted locally")
 
 # ---------------------------------------------------------------------------
 # Facebook: disabled (mUSE_FACEBOOK=false below); explain user-initiated actions
