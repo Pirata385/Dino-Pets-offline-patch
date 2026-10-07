@@ -4,6 +4,8 @@ Miniclip's **Dino Pets** for Android (version 1.1.4) has been discontinued and i
 servers are gone; the original APK now crashes on its loading screen.  This
 repository patches that APK so the complete game runs **without any network
 connection or server**, with the original gameplay, progression, art and UI.
+Coin and gem packs are granted locally for free, and the Facebook-exclusive
+Dimorphodon is unlocked when the tutorial is over.
 
 ![Fresh install, airplane mode](docs/screenshots/01-fresh-install-offline.jpg)
 
@@ -12,7 +14,7 @@ connection or server**, with the original gameplay, progression, art and UI.
 | | |
 |---|---|
 | **APK** | [`output/DinoPets-1.1.4-offline.apk`](output/DinoPets-1.1.4-offline.apk) |
-| SHA-256 | `5c4499b208e13c95dafd7dce4aacb91839616a8ca28b4036dbf6021ec9fd8a97` |
+| SHA-256 | `41abe8f755e2f30c8d9a0c483b8d110dc095bf1d28ef57e2caeabc3c0fce2fc4` |
 | Package | `com.miniclip.dinopets` 1.1.4 (versionCode 13), minSdk 8, targetSdk 24 |
 | Permissions | `VIBRATE` only (no internet permission at all) |
 | Signing cert | `CN=Dino Pets Offline Edition`, SHA-256 `17f36394…ce7141` |
@@ -30,6 +32,8 @@ connection or server**, with the original gameplay, progression, art and UI.
    file and format.
 3. Install the APK (sideload, or `adb install DinoPets-1.1.4-offline.apk`).
    Android 14–17 accept it; it targets API 24, the minimum those versions allow.
+   It installs over earlier builds of this offline edition and keeps their save
+   (same signing key).
 
 The first launch takes a little longer while the game builds its world from the
 bundled configuration.  Airplane mode is fine.
@@ -43,8 +47,9 @@ bundled configuration.  Airplane mode is fine.
 | Timers: building, hatching, breeding, shop income, daily rewards | NTP-verified time | device clock; timers keep running while the game is closed |
 | Visiting other shelters | social server | the 5 bundled community shelters (Kirini, AlexGrant, Gertrudes, Philosoraptor, MrFabulous) can be visited, rated and added as friends |
 | Reminder notifications ("Visit Park", …) | local alarms | kept, and fixed so they appear on Android 6.0+ |
-| Buying coins/gems (Google Play, GetJar) | store servers | declined immediately with a short message; everything stays obtainable with in-game currency, and gems are still earned through play |
-| Facebook, News, More Games, Terms, Rate | Facebook / Miniclip servers | a short "not available in the offline edition" message; nothing hangs |
+| Buying coins/gems (Google Play and GetJar store tabs) | Play Store / GetJar billing and Miniclip receipt validation | **free and local**: tapping a pack completes it at once with the game's own "Purchase complete" pop-up, and the pack's original amount (times the game's level multiplier) is added and saved |
+| Facebook-exclusive dino (Dimorphodon, the "Login to Facebook" quest reward) | Facebook login | **unlocked automatically** once the tutorial is finished, with a "Congratulations!" pop-up; then free in the Dinos shop like any other dino.  Granted once per save; older saves that already finished the tutorial get it the next time the map opens |
+| Facebook login/share/like, News, More Games, Terms, Rate | Facebook / Miniclip servers | a short "not available in the offline edition" message; nothing hangs |
 | Other players by Dino ID, messages | social server | not available (there are no other players); the game reports it normally |
 | Ads, analytics, attribution, push | 3rd-party servers | removed |
 
@@ -53,6 +58,10 @@ bundled configuration.  Airplane mode is fine.
 <img src="docs/screenshots/03-breeding-timer-finished-offline.jpg" width="49%" alt="Breeding finished while the game was closed">
 <img src="docs/screenshots/04-visiting-community-shelter.jpg" width="49%" alt="Visiting a bundled community shelter">
 <img src="docs/screenshots/05-online-only-feature-notice.jpg" width="49%" alt="Notice for an online-only feature">
+<img src="docs/screenshots/07-offline-purchase-complete.jpg" width="49%" alt="Offline purchase completes at once">
+<img src="docs/screenshots/08-purchased-coins-and-gems.jpg" width="49%" alt="Coins and gems after two offline purchases">
+<img src="docs/screenshots/09-facebook-dino-unlocked.jpg" width="49%" alt="Facebook-exclusive dino unlocked after the tutorial">
+<img src="docs/screenshots/10-dimorphodon-free-in-shop.jpg" width="49%" alt="Dimorphodon free in the Dinos shop">
 </p>
 
 ## How it was tested
@@ -69,6 +78,15 @@ On an Android 7.1.1 ARM emulator in airplane mode with no active network:
 * Exercised every online entry point (store, Facebook, social tabs, add by
   Dino ID, community visit, rating, settings links, notifications).  None
   hangs or crashes, and logcat shows no fatal errors.
+* Bought gem and coin packs through both store tabs (Google Play: 20 gems,
+  240 gems, 3800 coins, 20200 coins; GetJar: 55 gems).  Each completed at once
+  and the new totals were in the decrypted save; on the final APK they were
+  unchanged after a force-stop and relaunch.
+* Finished the tutorial on a fresh install: the Dimorphodon unlock pop-up
+  appears right after it, the dino is free in the shop, and it was placed,
+  built and inaugurated like any other dino.  Relaunching does not grant it
+  again.  A save that had finished the tutorial before this feature existed
+  got the unlock (once) when the map opened.
 
 Details, including every server endpoint and how each was handled, are in
 [docs/ANALYSIS.md](docs/ANALYSIS.md).
@@ -76,7 +94,7 @@ Details, including every server endpoint and how each was handled, are in
 ## Known limitations
 
 * Needs 32-bit ARM support (see *Installing*).
-* No purchases, no Facebook, and no features that involved other real players.
+* No real Facebook login, and no features that involved other real players.
 * The game trusts the device clock: changing the date or time affects timers.
 * Content is what shipped inside 1.1.4 (configuration version 1.1.2).  Any later
   server-side content updates can't be recovered.
@@ -110,8 +128,8 @@ the key that built it:
 | Path | Contents |
 |---|---|
 | `build.sh` | full rebuild pipeline |
-| `patches/native/patch_libgame.py` | binary patches for `libgame.so` (startup, time, cloud save, polling) |
-| `patches/smali/patch_smali.py` | Java-layer patches (NTP, ping, billing, Facebook, analytics, notifications) |
+| `patches/native/patch_libgame.py` | binary patches for `libgame.so` (startup, time, cloud save, polling, Facebook dino unlock) |
+| `patches/smali/patch_smali.py` | Java-layer patches (NTP, ping, local purchases, Facebook, analytics, notifications) |
 | `patches/java/src/` | `com.miniclip.offline.Offline`, the local replacements those patches call |
 | `patches/manifest/patch_manifest.py` | offline manifest (no network permissions or SDK components), targetSdk 24 |
 | `tools/fetch_tools.sh` | downloads the build tools |
