@@ -1,0 +1,5 @@
+.tools/
+build/
+signing/
+*.idsig
+__pycache__/
